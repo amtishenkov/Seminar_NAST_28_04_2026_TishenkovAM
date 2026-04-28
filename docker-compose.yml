@@ -1,0 +1,124 @@
+services:
+  namenode:
+    image: apache/hadoop:3.3.6
+    container_name: namenode
+    user: "0:0"
+    command: >
+        bash -c "
+            if [ ! -f /hadoop/dfs/name/current/VERSION ]; then
+                echo 'Formatting HDFS...';
+                hdfs namenode -format;
+            fi;
+            hdfs namenode
+        "
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - ./hadoop-conf:/opt/hadoop/etc/hadoop
+      - namenode_data:/hadoop/dfs/name
+    networks:
+      - data-net
+
+  datanode:
+    image: apache/hadoop:3.3.6
+    container_name: datanode
+    user: "0:0"
+    command: ["hdfs", "datanode"]
+    depends_on:
+      - namenode
+    volumes:
+      - ./hadoop-conf:/opt/hadoop/etc/hadoop
+      - datanode_data:/hadoop/dfs/data
+    networks:
+      - data-net
+
+  spark-master:
+    build: ./spark
+    container_name: spark-master
+    command: >
+        /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+        --host spark-master
+        --port 7077
+        --webui-port 8080
+    volumes:
+      - ./hadoop-conf:/opt/spark/conf/hadoop-conf:ro
+      - ./jars:/opt/spark/user-jars:ro
+    environment:
+      - HADOOP_CONF_DIR=/opt/spark/conf/hadoop-conf
+      - SPARK_LOCAL_IP=spark-master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+      - PYSPARK_PYTHON=/usr/bin/python3
+      - PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    networks:
+      - data-net
+
+  spark-worker:
+    build: ./spark
+    container_name: spark-worker
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    volumes:
+      - ./hadoop-conf:/opt/spark/conf/hadoop-conf:ro
+      - ./jars:/opt/spark/user-jars:ro
+    environment:
+      - HADOOP_CONF_DIR=/opt/spark/conf/hadoop-conf
+      - SPARK_LOCAL_IP=spark-worker
+      - SPARK_HOME=/opt/spark
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_EXTRA_CLASSPATH=/opt/spark/jars/*
+      - PYSPARK_PYTHON=/usr/bin/python3
+      - PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+    networks:
+      - data-net
+
+  zeppelin:
+    build: ./zeppelin
+    container_name: zeppelin
+    ports:
+      - "8080:8080"
+    environment:
+      - SPARK_HOME=/opt/spark
+      - HADOOP_CONF_DIR=/opt/spark/conf/hadoop-conf
+      - SPARK_CONF_DIR=/opt/spark/conf
+    volumes:
+      - ./spark-config:/opt/zeppelin/spark-conf:ro
+      - ./hadoop-conf:/opt/zeppelin/hadoop-conf:ro
+      - ./jars:/opt/zeppelin/user-jars:ro
+      - ./jars:/opt/spark/user-jars:ro
+    depends_on:
+      - spark-master
+      - namenode
+    networks:
+      - data-net
+  
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minio
+      - MINIO_ROOT_PASSWORD=minio123
+    ports:
+      - "9001:9000"
+      - "9002:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - data-net
+
+volumes:
+  namenode_data:
+  datanode_data:
+  minio_data:
+
+networks:
+  data-net:
+    driver: bridge
